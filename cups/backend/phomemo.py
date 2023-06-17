@@ -7,6 +7,7 @@ import dbus
 from bluetooth import *
 import usb.core
 import usb.util
+from usb.util import *
 
 bus = dbus.SystemBus()
 
@@ -55,20 +56,46 @@ class find_class(object):
         return False
 
 def scan_usb():
-    printers = usb.core.find(find_all=1, custom_match=find_class(7), idVendor=0x0493)
+    printers = usb.core.find(find_all=1, custom_match=find_class(7))
     for printer in printers:
             for cfg in printer:
                 intf = usb.util.find_descriptor(cfg, bInterfaceClass=7)
                 if intf is None:
                     continue
+                Configuration = cfg
                 Interface = intf.bInterfaceNumber
+                Alternate = intf.bAlternateSetting
                 break
-            if printer.idProduct == 0xb002:
+            if   printer.idVendor == 0x0493 and printer.idProduct == 0xb002:
                 model = 'M02'
-            elif printer.idProduct == 0x8760:
+            elif printer.idVendor == 0x0493 and printer.idProduct == 0x8760:
                 model = 'M110'
-            else:
+            elif printer.idVendor == 0x0493 :
                 model = 'Unknown(0x%04x)' % (printer.idProduct)
+            elif printer.idVendor == 0x0483 and printer.idProduct == 0x5740:
+                # Some Phomemo printers like M110S have ID 0483(STMicroelectronics):5740(Virtual COM Port). 
+                # Since the model cannot be identified from this ID set, further conversation 
+                #  with the printer is required to obtain the model name.
+                is_kernel_driver_active = printer.is_kernel_driver_active(Interface)
+                if is_kernel_driver_active:
+                    printer.detach_kernel_driver(Interface)
+                ret = printer.ctrl_transfer(
+                    usb.util.build_request_type(CTRL_IN,CTRL_TYPE_CLASS,CTRL_RECIPIENT_INTERFACE),
+                    0,
+                    Configuration.bConfigurationValue,
+                    Interface << 8 | Alternate,
+                    2048,
+                    5000
+                )
+                if is_kernel_driver_active:
+                    printer.attach_kernel_driver(Interface)
+                sret = ''.join([chr(x) for x in ret])
+                mdl= [s for s in sret.split(';') if s.startswith('MDL:') ]
+                if not mdl :
+                   continue
+                model = mdl[0].lstrip('MDL:')
+            else:
+                continue
             usb.util.get_langids(printer)
             SerialNumber = usb.util.get_string(printer, printer.iSerialNumber)
             device_uri = 'usb://Unknown/Printer?serial=%s&interface=%d' % (SerialNumber, Interface)
